@@ -1,0 +1,262 @@
+Practical Machine Learning: Prediction Assignment Writeup
+========================================================
+Classification of Exercise Data   
+========================================================
+
+
+## Synopsis
+
+As described in the "Background" portion of the project assignement, researchers used data gathered from from strategically placed accelerometers on six exercise study participants, who performed an exercise regimen of five tasks correctly and incorrectly.  A paper (Velloso, et al) describing their study can be found at http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf  Information gleaned from this paper was used as the basis for the classification performed in this analysis.  Unlike the paper, this analysis follows the premise of reproducible research, and all calculations use the R programming language, and are provided herein.
+
+## Data processing
+
+Training and test data sets were provided respectively in the "pml-training.csv" and "pml-testing.csv" files.  
+
+```{r}
+# Initialize the environment
+rm(list=ls())
+setwd("~/Documents/Coursera Courses/Practical Machine Learning/project")
+library(caret)
+set.seed(3523)
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+```
+
+### Data Exploration
+
+After loading the data, we compare the variable names in each of the datasets.  They should be identical.
+
+```{r}
+names(training)==names(testing)
+```
+
+That last FALSE needs to be investigated.  Let's check the size of the data sets.
+
+```{r}
+dim(training)
+dim(testing)
+```
+
+Apparently the last column differs between the test dataset and the training dataset.  
+
+```{r}
+names(training)[ncol(training)]
+names(testing)[ncol(testing)]
+```
+
+### Create Cross Validation Training/Test Sets
+
+Sure enough.  Apparently the test dataset lacks the correct classification (classe) variable.  We're going to have to use machine learning to identify probable answers.  Also, this means that we'll need to use cross validation to generate a test set that has answers (classe) to use to generate our learning algorithm before setting it loose on the actual test dataset (loaded from "pml-testing.csv").  createDataPartition can be used to accomplish this.  
+
+```{r}
+dat <- read.csv("pml-training.csv")
+inTrain = createDataPartition(dat$classe, p = 3/4)[[1]]
+training = dat[ inTrain,]
+testing = dat[-inTrain,]
+```
+
+### Feature Extraction and Selection
+
+The Velloso paper mentions a selection of 17 features (aka explanatory variables) from the 160 variables available.  The Hall method was employed to use a “Best First” strategy based on backtracking as described somewhere in a cited 198 page PHD thesis ("Correlation-based Feature Selection for Machine Learning"", Mark A. Hall).  Rather than try to attempt to reproduce this "Best First" strategy without reading the 198 page PHD thesis, we'll start by attempting to extract the pertinent variables as explained in the text of the Velloso paper (cited below, with parenthetical variable counts noted).
+
+"In the belt, were selected the mean (1) and variance of the roll (2), maximum(3), range (4) and variance (5) of the accelerometer vector, variance of the gyro (6) and variance of the magnetometer (7). In the arm, the variance of the accelerometer vector (8) and the maximum (9) and minimum (10) of the magnetometer were selected. In the dumbbell, the selected features were the maximum of the acceleration (11), variance of the gyro (12) and maximum (13) and minimum (14) of the magnetometer, while in the glove, the sum of the pitch (15) and the maximum (16) and minimum (17) of the gyro were selected."
+
+Some of the features cited by the Velloso paper are derived from the features in the raw data set.  These derived features are Roll, Pitch, and Yaw (the so-called Euler angles) as well as the mean, variance,
+standard deviation, max, min, amplitude, kurtosis and skew-
+ness.  These 96 derived features are likely correlated to the 36 raw three-axis gyro, accelerometer, and magnetometer data for the four sets of sensors, so one approach to modelling would be to select only the raw data and eliminate the derived data, under the assumption that the bulk of the information is contained in the raw data and no additional information in the derived data.
+
+First, lets do a principal component analysis (PCA) to see how much of the variability we can catch with how many features, and see whether or not the bulk of these features are raw or derived.
+
+```{r}
+preProcess(training[,-ncol(training)],method="pca",thresh = 0.90) 
+```
+
+This throws an error indicating that we need to remove or convert non-numeric columns in the test set.  We must do some pre-preProcessing before we can expect preProcess to work.
+
+```{r}
+coltype <- rep(NA,ncol(training)) # create coltype array initially of NAs
+for (i in 1:ncol(training)){
+  coltype[i]<-class(training[,i])
+}
+```
+
+Let's see what the various "factor" columns are.
+
+```{r}
+names(training[,coltype=="factor"])
+```
+
+It looks like all of the "factor" columns are some but not all of the  derived features.  Let's get rid of the "user_name","cvtd_timestamp","new_window" columns, which won't be useful for numeric prediction:
+
+```{r}
+drops <- c("user_name","cvtd_timestamp","new_window")
+training <- training[,!(names(training) %in% drops)]
+# re-run
+coltype <- rep(NA,ncol(training)) # create coltype array initially of NAs
+for (i in 1:ncol(training)){
+  coltype[i]<-class(training[,i])
+}
+coltype <- coltype[1:(length(coltype)-1)] # get rid of "classe"
+names(training[,coltype=="factor"])
+```
+
+Let's try to convert the remaining columns to numeric en-masse:
+
+```{r}
+training[,names(training[,coltype=="factor"])] <- as.numeric(training[,names(training[,coltype=="factor"])])
+```
+
+We'll need to convert these to numeric if we're going to want to preProcess them, and possibly use them in a learning algorithm.  Trying various automated ways of converting "training" to all numeric have failed, producing errors such as that shown above, so we'll do it the old fashioned way (one at a time):
+
+```{r}
+training$kurtosis_roll_belt <- as.numeric(training$kurtosis_roll_belt)
+training$kurtosis_picth_belt <- as.numeric(training$kurtosis_picth_belt)
+training$kurtosis_yaw_belt <- as.numeric(training$kurtosis_yaw_belt)
+training$skewness_roll_belt <- as.numeric(training$skewness_roll_belt)
+training$skewness_roll_belt.1 <- as.numeric(training$skewness_roll_belt.1)
+training$skewness_yaw_belt <- as.numeric(training$skewness_yaw_belt)
+training$max_yaw_belt <- as.numeric(training$max_yaw_belt)
+training$min_yaw_belt <- as.numeric(training$min_yaw_belt)
+training$amplitude_yaw_belt <- as.numeric(training$amplitude_yaw_belt)
+training$kurtosis_roll_arm <- as.numeric(training$kurtosis_roll_arm)
+training$kurtosis_picth_arm <- as.numeric(training$kurtosis_picth_arm)
+training$kurtosis_yaw_arm <- as.numeric(training$kurtosis_yaw_arm)
+training$skewness_roll_arm <- as.numeric(training$skewness_roll_arm)
+training$skewness_picth_arm <- as.numeric(training$skewness_picth_arm) # problem here
+training$skewness_yaw_arm <- as.numeric(training$skewness_yaw_arm)
+training$kurtosis_roll_dumbbell <- as.numeric(training$kurtosis_roll_dumbbell)
+training$kurtosis_picth_dumbbell <- as.numeric(training$kurtosis_picth_dumbbell)
+training$kurtosis_yaw_dumbbell <- as.numeric(training$kurtosis_yaw_dumbbell)
+training$skewness_roll_dumbbell <- as.numeric(training$skewness_roll_dumbbell)
+training$skewness_picth_dumbbell <- as.numeric(training$skewness_picth_dumbbell) # problem here
+training$skewness_yaw_dumbbell <- as.numeric(training$skewness_yaw_dumbbell)
+training$max_yaw_dumbbell <- as.numeric(training$max_yaw_dumbbell)
+training$min_yaw_dumbbell <- as.numeric(training$min_yaw_dumbbell)
+training$amplitude_yaw_dumbbell <- as.numeric(training$amplitude_yaw_dumbbell)
+training$kurtosis_roll_forearm <- as.numeric(training$kurtosis_roll_forearm)
+training$kurtosis_picth_forearm <- as.numeric(training$kurtosis_picth_forearm)
+training$kurtosis_yaw_forearm <- as.numeric(training$kurtosis_yaw_forearm)
+training$skewness_roll_forearm <- as.numeric(training$skewness_roll_forearm)
+training$skewness_pitch_forearm <- as.numeric(training$skewness_pitch_forearm)
+training$skewness_yaw_forearm <- as.numeric(training$skewness_yaw_forearm)
+training$max_yaw_forearm <- as.numeric(training$max_yaw_forearm)
+training$min_yaw_forearm <- as.numeric(training$min_yaw_forearm)
+training$amplitude_yaw_forearm <- as.numeric(training$amplitude_yaw_forearm)
+```
+
+We had problems with converting "skewness_pitch_arm" and "skewness_pitch_dumbbell" to numeric.  We could either go in and try to find/edit the error(s) in 19,622 rows of data, or we could make the executive decision to exclude these features from futher consideration in the analysis, which is what we'll do.
+
+```{r}
+drops <- c("skewness_pitch_arm","skewness_pitch_dumbbell")
+training <- training[,!(names(training) %in% drops)]
+```
+
+Now we should finally be able to do PCA.
+
+```{r}
+preProcess(training[,-ncol(training)],method="pca",thresh = 0.90) 
+```
+
+Wrongo.  We need to find the zero variance columns and dispose of them.  Per http://stackoverflow.com/questions/15068981/removal-of-constant-columns-in-r we'll find out what columns are the problem.
+
+```{r}
+names(training[, sapply(training, function(v) var(v, na.rm=TRUE)==0)])
+```
+
+Apparently no columns have zero variance.  What gives?  We could either go in and try to find/edit the 160 columns of data to figure out what the problem is, or we can start with an empty dataframe and add data to it, checking whether or not preProcess kaks on the data as each column of data is added back.  Okay, let's try the opposite approach and start adding columns rather than subtracting them.  We'll start with all of the raw data, which consists of the 36 features for the three-axis (X,Y, and Z) gyro, accelerometer, and magnetometer data for the four sets of sensors.
+
+```{r}
+rawInd <- c("gyros_belt_x","gyros_belt_y","gyros_belt_z",
+            "accel_belt_x","accel_belt_y","accel_belt_z", 
+            "magnet_belt_x","magnet_belt_y","magnet_belt_z",
+            "gyros_arm_x","gyros_arm_y","gyros_arm_z",
+            "accel_arm_x","accel_arm_y","accel_arm_z", 
+            "magnet_arm_x","magnet_arm_y","magnet_arm_z",
+            "gyros_dumbbell_x","gyros_dumbbell_y","gyros_dumbbell_z",
+            "accel_dumbbell_x","accel_dumbbell_y","accel_dumbbell_z", 
+            "magnet_dumbbell_x","magnet_dumbbell_y","magnet_dumbbell_z",
+            "gyros_forearm_x","gyros_forearm_y","gyros_forearm_z",
+            "accel_forearm_x","accel_forearm_y","accel_forearm_z", 
+            "magnet_forearm_x","magnet_forearm_y","magnet_forearm_z",
+            "classe") # can't forget classe
+training <- training[,(names(training) %in% rawInd)]
+# While we're at it, do the same to testing as we'll soon need it
+testing <- testing[,(names(testing) %in% rawInd)] # this test set includes classe
+
+```
+
+### Modelling, Training, and Prediction
+
+Now, maybe, if there is a God, we should finally be able to perform the PCA.
+
+```{r}
+preProcess(training[,-ncol(training)],method="pca",thresh = 0.90) 
+```
+
+Good.  Let's try changing the threshold.
+
+```{r}
+preProcess(training[,-ncol(training)],method="pca",thresh = 0.95) 
+```
+
+Cranking it again...
+
+```{r}
+preProcess(training[,-ncol(training)],method="pca",thresh = 0.99) 
+```
+
+So 26 components to capture 99 percent of the variance sounds great, but the question is whether or not the ultimate resulting model will perform well, without the remaining 134 (mostly derived) explanatory variables.  Still, I'm willing to try modelling (random forest) and prediction at this point, just to see how close we are.
+
+```{r}
+preProc <- preProcess(training[,-ncol(training)],method="pca",thresh = 0.99) 
+trainPCA <- predict(preProc,training[,-ncol(training)])
+```
+
+The following "train" command takes around an hour to run on my ghetto PC, and probably a lesser amount, but still way too much time on better processors.
+
+modelFit <- train(training$classe ~.,method="rf", data=trainPCA)
+
+By providing a trainControl that uses k-fold cross-validation instead of bootstrapping, and by adding "allowParallel=TRUE" to take advantage of my ghetto PC's dual core architecture, we can speed it up to only several minutes, which sucks less.
+
+```{r}
+trControl <- trainControl(method = "cv", number = 4)
+modelFit <- train(training$classe ~.,trControl=trControl, method="rf", data=trainPCA,allowParallel=TRUE)
+modelFit$times
+```
+
+```{r}
+plot(modelFit, main="Figure 1: Cross-Validation Accuracy")
+```
+
+Now, let's see the test results from the random forest training model we just generated.
+
+```{r}
+testPCA <- predict(preProc,testing[,-ncol(testing)])
+confusionMatrix(testing[,ncol(testing)],predict(modelFit,testPCA))
+```
+
+### Out-of-Sample Error & Cross-Validation Error Estimation
+
+Okay, that's a pretty good confusion matrix.  We get an (in-sample) accuracy of 0.977, which seems really good.  The out-of-sample error rate should be 1-accuracy (in-sample) or 2.3%.  The cross-validation accuracy is shown in Figure 1.  Cross-validation error is estimated as 1-cross-validation accuracy, should be in the range of 3.5% to 4.5%.  Its unlikely that adding any additional features, especially if they're derived from the 36 original raw features directly output from the inertial measurement units, will have a measurable effect.  Let's apply this model to the original test set from "pml-testing.csv", and get some real predictions.
+
+First we need to regenerate the original test set, as we'd previously over-wrote it with the createDataPartition, and then select the 36 features, from which the PCA model will use only 26.  This time we'll use a new "testing1" variable, in case we've got to go back and do more stuff with the original "testing" variable.
+
+```{r}
+testing1 <- read.csv("pml-testing.csv") 
+testing1 <- testing1[,(names(testing1) %in% rawInd)]
+dim(testing1)
+names(testing1) # just to check
+```
+
+Just to note, testing1 lacks a classe column (because we're going to predict it).  
+
+## Results
+
+And now, we will run testing1 through the model to generate the actual predictions on the original test set:
+
+```{r}
+test1PCA <- predict(preProc,testing1)
+predict(modelFit,test1PCA)
+```
+
+(Actual word count, not including code and error messages, is, according to LibreOffice Writer, 1276 words).
